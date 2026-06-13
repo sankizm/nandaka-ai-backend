@@ -7,9 +7,9 @@ from pydantic import BaseModel
 from typing import Optional
 from collections import defaultdict
 
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip().strip('"').strip("'")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().strip('"').strip("'").rstrip("/")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "").strip().strip('"').strip("'")
 
 if not all([NVIDIA_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY]):
     raise Exception("Missing required environment variables: NVIDIA_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY")
@@ -167,9 +167,12 @@ def chat_faq(req: ChatRequest):
         "match_count": 20
     }
     try:
-        vector_resp = requests.post(rpc_url, headers=rpc_headers, json=rpc_payload, timeout=10)
+        vector_resp = requests.post(rpc_url, headers=rpc_headers, json=rpc_payload, timeout=25)
         vector_candidates = vector_resp.json() if vector_resp.status_code == 200 else []
+        if vector_resp.status_code != 200:
+            print(f"--> Vector Error: {vector_resp.status_code} - {vector_resp.text}")
     except Exception as e:
+        print(f"--> Vector Exception: {str(e)}")
         vector_candidates = []
 
     # Step 2B: Keyword Search (Top 20)
@@ -181,19 +184,26 @@ def chat_faq(req: ChatRequest):
         "Authorization": f"Bearer {SUPABASE_ANON_KEY}"
     }
     try:
-        keyword_resp = requests.get(keyword_url, headers=keyword_headers, timeout=10)
+        keyword_resp = requests.get(keyword_url, headers=keyword_headers, timeout=25)
         keyword_candidates = keyword_resp.json() if keyword_resp.status_code == 200 else []
+        if keyword_resp.status_code != 200:
+            print(f"--> Keyword Error: {keyword_resp.status_code} - {keyword_resp.text}")
     except Exception as e:
+        print(f"--> Keyword Exception: {str(e)}")
         keyword_candidates = []
 
     # Step 2C: Merge via Python RRF
     candidates = compute_rrf(vector_candidates, keyword_candidates)
 
-    # Step 2.5: Confidence Gate for Hybrid
-    # RRF score ke metrics thode alag hote hain, but safety check lagake rakhte hain
     if not candidates:
+        err_msg = "Supabase Connection Failed. "
+        try:
+            err_msg += f"URL Configured: {SUPABASE_URL[:15]}... "
+            err_msg += f"Vector Status: {vector_resp.status_code} "
+        except:
+            pass
         return {
-            "answer": "Mujhe is sawaal ka jawab nahi pata. Kripya security team se sampark karein.",
+            "answer": f"Backend Error: {err_msg}. Please check Render Environment Variables.",
             "source": "fallback",
             "candidates": []
         }
